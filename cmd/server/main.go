@@ -2,12 +2,12 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"os/signal"
-    amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/pubsub"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/routing"
-	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
+	amqp "github.com/rabbitmq/amqp091-go"
+	"os"
+	"os/signal"
 )
 
 func main() {
@@ -28,13 +28,47 @@ func main() {
 		fmt.Printf("Failed to create channel: %s\n", err)
 		return
 	}
-	channel, queue, err := pubsub.DeclareAndBind(conn, routing.ExchangePerilTopic, routing.GameLogSlug,"game_logs.*", pubsub.Durable)
+	// 	Update the server to SubscribeGob to the game_logs queue instead of just declaring it. Use a wildcard in the routing key to make sure you capture logs from all clients, no matter the username. The handler should:
+	// Defer printing a new prompt to the console.
+	// Use the gamelogic.WriteLog function to write the log to disk.
+	err = pubsub.SubscribeGob(
+		conn,
+		routing.ExchangePerilTopic,
+		routing.GameLogSlug,
+		"game_logs.*",
+		pubsub.Durable,
+		func(log routing.GameLog) pubsub.Acktype {
+			defer gamelogic.PrintServerHelp()
+			err := gamelogic.WriteLog(log)
+			if err != nil {
+				fmt.Printf("Failed to write log: %s\n", err)
+				return pubsub.NackRequeue
+			}
+			return pubsub.Ack
+		},
+	)
 	if err != nil {
-		fmt.Printf("Failed to declare and bind queue: %s\n", err)
+		fmt.Printf("Failed to subscribe to game logs: %s\n", err)
 		return
 	}
-	defer channel.Close()
-	fmt.Printf("Declared and bound queue: %s\n", queue.Name)
+	defer ch.Close()
+	fmt.Println("Subscribed to game logs successfully!")
+	// channel, queue, err := pubsub.DeclareAndBind(conn, routing.ExchangePerilTopic, routing.GameLogSlug, "game_logs.*", pubsub.Durable)
+	// if err != nil {
+	// 	fmt.Printf("Failed to declare and bind queue: %s\n", err)
+	// 	return
+	// }
+	// defer channel.Close()
+	// fmt.Printf("Declared and bound queue: %s\n", queue.Name)
+
+	deadLetterChannel, deadLetterQueue, err := pubsub.DeclareAndBind(conn, "peril_dlx", "peril_dlq", "", pubsub.Durable)
+	if err != nil {
+		fmt.Printf("Failed to declare and bind dead letter queue: %s\n", err)
+		return
+	}
+	defer deadLetterChannel.Close()
+	fmt.Printf("Declared and bound dead letter queue: %s\n", deadLetterQueue.Name)
+
 	for {
 		input := gamelogic.GetInput()
 		if len(input) == 0 {
